@@ -492,7 +492,7 @@ function available() {
     ...(S.playerFloor < TOP ? ['call:up'] : []),
     ...(S.playerFloor > 0 ? ['call:down'] : []),
   ];
-  const floors = () => FLOORS.map((_, i) => i).filter(i => i !== S.carFloor).reverse().map(i => `floor:${i}`);
+  const floors = () => FLOORS.map((_, i) => i).filter(i => i !== S.carFloor).map(i => `floor:${i}`); // B1F → R の順
   switch (S.phase) {
     case 'OUT_IDLE':
     case 'OUT_WAITING':
@@ -677,7 +677,7 @@ function renderUI() {
     }
     b.addEventListener('click', () => doAction(a));
   }
-  controls.append(...[btnGroup, doorGroup, actGroup].filter(g => g.children.length));
+  controls.append(...[doorGroup, btnGroup, actGroup].filter(g => g.children.length));
 }
 
 // ============================================================
