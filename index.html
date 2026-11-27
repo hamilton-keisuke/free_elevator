@@ -1,0 +1,673 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>エレベーターたいけん</title>
+<style>
+  :root {
+    --bg: #1d2230;
+    --panel: #2b3145;
+    --panel-line: #444c66;
+    --text: #ffffff;
+    --floor-btn: #eef1f6;
+    --floor-btn-text: #222;
+    --lit: #ffb030;
+    --board: #2fb36b;
+    --alight: #f07a2c;
+    --stay: #3d8fe0;
+  }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font-family: "Hiragino Maru Gothic ProN", "Hiragino Sans", "Noto Sans JP", "Yu Gothic", sans-serif;
+  }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  #view { flex: 1; position: relative; min-height: 0; }
+  #view canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  .hud {
+    position: absolute; background: rgba(0,0,0,.6); border-radius: 999px;
+    padding: 8px 16px; font-size: clamp(14px, 2.2vw, 20px); pointer-events: none;
+  }
+  #where { top: 12px; left: 12px; }
+  #status {
+    flex: 0 0 auto; background: #11141d; text-align: center; padding: 10px 16px;
+    font-size: clamp(15px, 2.2vw, 20px); border-top: 3px solid var(--panel-line);
+  }
+  #controls {
+    flex: 0 0 auto; background: var(--panel);
+    padding: 14px 16px 18px; min-height: 92px; box-sizing: border-box;
+    display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; align-items: center;
+  }
+  .group { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  .waiting { opacity: .7; font-size: 18px; }
+  button.b {
+    font: inherit; border: none; cursor: pointer; border-radius: 14px;
+    box-shadow: 0 4px 0 rgba(0,0,0,.35); transition: transform .05s;
+  }
+  button.b:active { transform: translateY(3px); box-shadow: 0 1px 0 rgba(0,0,0,.35); }
+  button.floor {
+    width: 64px; height: 64px; border-radius: 50%; font-size: 20px; font-weight: bold;
+    background: var(--floor-btn); color: var(--floor-btn-text);
+  }
+  button.call {
+    width: 84px; height: 64px; font-size: 18px; font-weight: bold;
+    background: var(--floor-btn); color: var(--floor-btn-text); line-height: 1.1;
+  }
+  button.call .arrow { font-size: 24px; display: block; }
+  button.door { width: 84px; height: 64px; font-size: 16px; font-weight: bold; background: #dfe9f5; color: #223; line-height: 1.1; }
+  button.door .arrow { font-size: 20px; display: block; letter-spacing: -2px; }
+  button.lit { background: var(--lit); color: #fff; box-shadow: 0 0 14px var(--lit), 0 4px 0 rgba(0,0,0,.35); }
+  button.action { padding: 16px 26px; font-size: 20px; font-weight: bold; color: #fff; }
+  button.board { background: var(--board); }
+  button.alight { background: var(--alight); }
+  button.stay { background: var(--stay); }
+  @media (max-width: 600px) {
+    button.floor { width: 54px; height: 54px; font-size: 17px; }
+    button.action { padding: 12px 18px; font-size: 17px; }
+  }
+</style>
+<script type="importmap">
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="app">
+  <div id="view">
+    <div id="where" class="hud"></div>
+  </div>
+  <div id="status"></div>
+  <div id="controls"></div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ============================================================
+// 設定（将来は設定画面から変更できるようにする想定）
+// ============================================================
+const CONFIG = {
+  floors: ['B1F', '1F', '2F', '3F', '4F', '5F', 'R'], // 下から順
+  playerStartFloor: '1F',
+  elevatorStartFloor: '4F',
+  secondsPerFloor: 1.1,
+  doorSeconds: 0.9,
+};
+const FLOORS = CONFIG.floors;
+const TOP = FLOORS.length - 1;
+const FLOOR_COLORS = ['#8d8f99', '#e8dcc4', '#cfe3f0', '#d9ecd2', '#f3d9de', '#e6dff5', '#bfe6ff'];
+const short = f => f.replace(/F$/, '');                 // 'B1F' -> 'B1', 'R' -> 'R'
+const kana = f => f === 'R' ? 'おくじょう'
+  : f.startsWith('B') ? `ちか${f.slice(1, -1)}かい` : `${f.slice(0, -1)}かい`;
+
+// ============================================================
+// 状態
+// ============================================================
+// phase:
+//  OUT_IDLE     そと・エレベーター停止中（待ち）      押せる: そとのボタン
+//  OUT_WAITING  そと・エレベーター移動中（待ち）      押せる: そとのボタン
+//  OUT_CLOSING  そと・おりた後に扉が閉まる途中        押せる: そとのボタン（開け直す）
+//  OUT_ARRIVED  そと・エレベーター到着（扉ひらき）    押せる: のる
+//  BOARDING     のっている途中                        押せる: なし
+//  IN_STOPPED   なか・停止中（扉ひらき）              押せる: 階ボタン, 閉, おりる
+//  IN_ARRIVED   なか・目的階に到着（扉ひらき）        押せる: 階ボタン, 閉, おりる, おりない
+//  IN_CLOSED    なか・停止中（扉しまっている）        押せる: 階ボタン, 開, おりる
+//  IN_CLOSING   なか・扉が閉まる途中                  押せる: 開
+//  IN_MOVING    なか・移動中                          押せる: なし
+//  ALIGHTING    おりている途中                        押せる: なし
+//  BUSY         扉の開閉中など                        押せる: なし
+const S = {
+  phase: 'OUT_IDLE',
+  inside: false,
+  playerFloor: FLOORS.indexOf(CONFIG.playerStartFloor),
+  carFloor: FLOORS.indexOf(CONFIG.elevatorStartFloor),
+  moving: false,
+  moveDir: 0,
+  target: null,
+  door: 0, // 0=しまっている 1=ひらいている
+  callLit: { up: false, down: false },
+  doorBtnLit: null, // 'open' | 'close'
+};
+
+// ============================================================
+// Three.js 基本
+// ============================================================
+const view = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+view.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0e1016);
+const camera = new THREE.PerspectiveCamera(60, 1, 0.03, 50);
+camera.rotation.order = 'YXZ';
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.fov = camera.aspect < 1 ? 78 : 60;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+
+const std = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, ...extra });
+function box(w, h, d, mat, x, y, z) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z);
+  return m;
+}
+function plane(w, h, mat, x, y, z, rx = 0, ry = 0) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+  m.position.set(x, y, z); m.rotation.set(rx, ry, 0);
+  return m;
+}
+function canvasTex(w, h, draw) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  const redraw = (...a) => { ctx.clearRect(0, 0, w, h); draw(ctx, w, h, ...a); tex.needsUpdate = true; };
+  return { tex, redraw };
+}
+const FONT = '"Hiragino Maru Gothic ProN","Hiragino Sans","Noto Sans JP",sans-serif';
+
+// ---------- 表示器（階数インジケーター） ----------
+function drawIndicator(ctx, w, h) {
+  ctx.fillStyle = '#111'; ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#ff9a1f';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `bold 84px ${FONT}`;
+  ctx.fillText(short(FLOORS[S.carFloor]), w * 0.6, h * 0.54);
+  if (S.moving) {
+    ctx.font = `bold 64px ${FONT}`;
+    ctx.fillText(S.moveDir > 0 ? '▲' : '▼', w * 0.2, h * 0.54);
+  }
+}
+
+// ---------- ボタン用テクスチャ ----------
+function buttonTextures(label) {
+  const make = lit => {
+    const t = canvasTex(128, 128, ctx => {
+      ctx.beginPath(); ctx.arc(64, 64, 60, 0, Math.PI * 2);
+      ctx.fillStyle = lit ? '#ffb030' : '#e9ecf1'; ctx.fill();
+      ctx.lineWidth = 6; ctx.strokeStyle = lit ? '#fff1c9' : '#9aa1ad'; ctx.stroke();
+      ctx.fillStyle = lit ? '#fff' : '#333';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `bold ${label.length > 1 ? 50 : 62}px ${FONT}`;
+      ctx.fillText(label, 64, 68);
+    });
+    t.redraw();
+    return t.tex;
+  };
+  return { normal: make(false), lit: make(true) };
+}
+
+const clickables = [];
+function makeButton(label, radius, action, zone) {
+  const tx = buttonTextures(label);
+  const mesh = new THREE.Mesh(new THREE.CircleGeometry(radius, 40),
+    new THREE.MeshBasicMaterial({ map: tx.normal, transparent: true }));
+  mesh.userData = { action, zone, tx };
+  clickables.push(mesh);
+  return mesh;
+}
+const setLit = (mesh, lit) => { mesh.material.map = lit ? mesh.userData.tx.lit : mesh.userData.tx.normal; };
+
+// ============================================================
+// ホール（エレベーターのそと）
+// ============================================================
+const hall = new THREE.Group(); scene.add(hall);
+const hallWallMat = std(FLOOR_COLORS[1]);
+const hallFloorMat = std('#7b808b');
+hall.add(plane(8, 8.1, hallFloorMat, 0, 0, 3.95, -Math.PI / 2));
+hall.add(plane(8, 8.1, std('#f4f4f4'), 0, 3.2, 3.95, Math.PI / 2));
+hall.add(plane(8.1, 3.2, hallWallMat, -4, 1.6, 3.95, 0, Math.PI / 2));
+hall.add(plane(8.1, 3.2, hallWallMat, 4, 1.6, 3.95, 0, -Math.PI / 2));
+hall.add(plane(8, 3.2, hallWallMat, 0, 1.6, 8, 0, Math.PI));
+// 正面の壁（扉の穴: x -0.6..0.6, y 0..2.2）
+hall.add(box(3.4, 3.2, 0.2, hallWallMat, -2.3, 1.6, 0));
+hall.add(box(3.4, 3.2, 0.2, hallWallMat, 2.3, 1.6, 0));
+hall.add(box(1.2, 1.0, 0.2, hallWallMat, 0, 2.7, 0));
+// 扉枠
+const trimMat = std('#9da4ae', { metalness: 0.3, roughness: 0.4 });
+hall.add(box(0.08, 2.26, 0.06, trimMat, -0.64, 1.13, 0.11));
+hall.add(box(0.08, 2.26, 0.06, trimMat, 0.64, 1.13, 0.11));
+hall.add(box(1.36, 0.08, 0.06, trimMat, 0, 2.24, 0.11));
+hall.add(box(1.2, 0.02, 0.2, trimMat, 0, 0.01, 0));
+// 幅木
+hall.add(box(8, 0.1, 0.02, std('#555a66'), 0, 0.05, 0.11));
+
+// 階の看板
+const floorSign = canvasTex(512, 320, (ctx, w, h) => {
+  const f = FLOORS[hallFloor()];
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = '#334'; ctx.lineWidth = 14; ctx.strokeRect(7, 7, w - 14, h - 14);
+  ctx.fillStyle = '#223';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `bold 170px ${FONT}`; ctx.fillText(f, w / 2, h * 0.42);
+  ctx.font = `bold 56px ${FONT}`; ctx.fillText(kana(f), w / 2, h * 0.82);
+});
+hall.add(plane(1.2, 0.75, new THREE.MeshBasicMaterial({ map: floorSign.tex }), -2.2, 1.7, 0.11));
+
+// そとの表示器
+const outIndicator = canvasTex(256, 128, drawIndicator);
+hall.add(box(0.6, 0.3, 0.03, std('#333'), 0, 2.6, 0.11));
+hall.add(plane(0.52, 0.24, new THREE.MeshBasicMaterial({ map: outIndicator.tex }), 0, 2.6, 0.13));
+
+// そとの呼びボタン
+const callPlate = box(0.2, 0.36, 0.02, trimMat, 0.95, 1.15, 0.11);
+hall.add(callPlate);
+const upBtn = makeButton('▲', 0.055, 'call:up', 'out');
+const downBtn = makeButton('▼', 0.055, 'call:down', 'out');
+upBtn.position.set(0.95, 1.23, 0.125);
+downBtn.position.set(0.95, 1.07, 0.125);
+hall.add(upBtn, downBtn);
+
+// ホール照明
+hall.add(new THREE.HemisphereLight(0xffffff, 0x666670, 1.1));
+const hallLight = new THREE.PointLight(0xffffff, 22, 0, 2);
+hallLight.position.set(0, 3.0, 4.2);
+hall.add(hallLight);
+
+// ============================================================
+// エレベーターのかご
+// ============================================================
+const car = new THREE.Group(); scene.add(car);
+const carWall = std('#d9d3c6', { side: THREE.DoubleSide });
+car.add(plane(1.8, 1.8, std('#a27a52', { side: THREE.DoubleSide }), 0, 0.001, -1.1, -Math.PI / 2));
+car.add(plane(1.8, 1.8, std('#f3f3f3', { side: THREE.DoubleSide }), 0, 2.4, -1.1, Math.PI / 2));
+car.add(plane(1.8, 2.4, carWall, 0, 1.2, -2.0));
+car.add(plane(1.8, 2.4, carWall, -0.9, 1.2, -1.1, 0, Math.PI / 2));
+car.add(plane(1.8, 2.4, carWall, 0.9, 1.2, -1.1, 0, -Math.PI / 2));
+car.add(plane(0.3, 2.4, carWall, -0.75, 1.2, -0.2, 0, Math.PI));
+car.add(plane(0.3, 2.4, carWall, 0.75, 1.2, -0.2, 0, Math.PI));
+car.add(plane(1.2, 0.2, carWall, 0, 2.3, -0.2, 0, Math.PI));
+// 天井の照明パネル
+car.add(plane(1.0, 1.0, new THREE.MeshBasicMaterial({ color: 0xfffbea }), 0, 2.39, -1.1, Math.PI / 2));
+// 手すり
+const railMat = std('#c7ccd3', { metalness: 0.4, roughness: 0.3 });
+car.add(box(1.6, 0.04, 0.04, railMat, 0, 0.95, -1.94));
+car.add(box(0.04, 0.04, 1.5, railMat, 0.84, 0.95, -1.15));
+const carLight = new THREE.PointLight(0xfff4e0, 6, 0, 2);
+carLight.position.set(0, 2.2, -1.1);
+car.add(carLight);
+
+// なかの表示器（扉の上・内側）
+const inIndicator = canvasTex(256, 128, drawIndicator);
+car.add(plane(0.34, 0.16, new THREE.MeshBasicMaterial({ map: inIndicator.tex }), 0, 2.3, -0.21, 0, Math.PI));
+
+// なかの操作盤（右側の壁）
+car.add(box(0.02, 1.02, 0.26, trimMat, -0.89, 1.26, -0.55));
+// 操作盤上部の小さな表示器
+const panelIndicator = plane(0.2, 0.1, new THREE.MeshBasicMaterial({ map: inIndicator.tex }), -0.875, 1.68, -0.55, 0, Math.PI / 2);
+car.add(panelIndicator);
+const carButtons = FLOORS.map((f, i) => {
+  const b = makeButton(short(f), 0.04, `floor:${i}`, 'in');
+  b.position.set(-0.875, 0.96 + i * 0.1, -0.55);
+  b.rotation.y = Math.PI / 2;
+  car.add(b);
+  return b;
+});
+// 開・閉ボタン（操作盤の下。なかから見て左が開、右が閉）
+const openBtn = makeButton('開', 0.042, 'open', 'in');
+const closeBtn = makeButton('閉', 0.042, 'close', 'in');
+openBtn.position.set(-0.875, 0.83, -0.495);
+closeBtn.position.set(-0.875, 0.83, -0.605);
+openBtn.rotation.y = closeBtn.rotation.y = Math.PI / 2;
+car.add(openBtn, closeBtn);
+
+// 扉（ホール扉とかご扉を1組で表現）
+const doorMat = std('#b9c0ca', { metalness: 0.2, roughness: 0.7 });
+const doorL = box(0.6, 2.2, 0.04, doorMat, -0.3, 1.1, -0.15);
+const doorR = box(0.6, 2.2, 0.04, doorMat, 0.3, 1.1, -0.15);
+scene.add(doorL, doorR);
+
+// ============================================================
+// 見た目の更新
+// ============================================================
+function hallFloor() { return S.inside ? S.carFloor : S.playerFloor; }
+function applyHall() {
+  const i = hallFloor();
+  hallWallMat.color.set(FLOOR_COLORS[i % FLOOR_COLORS.length]);
+  floorSign.redraw();
+  // B1F は上だけ、R は下だけ
+  upBtn.visible = i < TOP;
+  downBtn.visible = i > 0;
+  if (upBtn.visible && !downBtn.visible) upBtn.position.y = 1.15;
+  else if (!upBtn.visible && downBtn.visible) downBtn.position.y = 1.15;
+  else { upBtn.position.y = 1.23; downBtn.position.y = 1.07; }
+}
+function refresh3D() {
+  outIndicator.redraw();
+  inIndicator.redraw();
+  setLit(upBtn, S.callLit.up);
+  setLit(downBtn, S.callLit.down);
+  carButtons.forEach((b, i) => setLit(b, S.target === i && S.inside));
+  setLit(openBtn, S.doorBtnLit === 'open');
+  setLit(closeBtn, S.doorBtnLit === 'close');
+}
+
+// ============================================================
+// アニメーション
+// ============================================================
+const tweens = new Set();
+const easeInOut = p => p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+function tween(sec, fn, ease = easeInOut) {
+  return new Promise(res => tweens.add({ t0: performance.now(), dur: sec * 1000, fn, ease, res }));
+}
+const wait = sec => tween(sec, () => {});
+function updateTweens(now) {
+  for (const t of [...tweens]) {
+    const p = Math.min(1, (now - t.t0) / t.dur);
+    t.fn(t.ease(p));
+    if (p >= 1) { tweens.delete(t); t.res(); }
+  }
+}
+
+const OUT_POS = { x: 0, y: 1.5, z: 3.4, yaw: 0, pitch: -0.03 };
+const rig = { ...OUT_POS };
+function moveCam(to, sec) {
+  const from = { ...rig };
+  return tween(sec, p => { for (const k in to) rig[k] = from[k] + (to[k] - from[k]) * p; });
+}
+
+// 扉は途中の位置からでも動かせる（かかる時間は残りの距離に比例）
+const openDoors = async () => {
+  const s = S.door;
+  if (s < 1) await tween(CONFIG.doorSeconds * Math.max(1 - s, 0.2), p => { S.door = s + (1 - s) * p; });
+  S.door = 1;
+};
+// 閉まりきったら true、途中で「開」が押されたら false を返す
+let closingJob = null;
+function closeDoors() {
+  return new Promise(res => {
+    const s = S.door;
+    const job = {
+      t0: performance.now(), dur: CONFIG.doorSeconds * 1000 * Math.max(s, 0.2), ease: easeInOut,
+      fn: p => { S.door = s * (1 - p); },
+      res: () => { closingJob = null; S.door = 0; res(true); },
+      cancel: () => { tweens.delete(job); closingJob = null; res(false); },
+    };
+    closingJob = job;
+    tweens.add(job);
+  });
+}
+
+async function moveCar(target) {
+  if (target === S.carFloor) return;
+  S.moving = true;
+  S.moveDir = Math.sign(target - S.carFloor);
+  refresh3D(); renderUI();
+  await wait(0.4); // 動き出し
+  while (S.carFloor !== target) {
+    await wait(CONFIG.secondsPerFloor);
+    S.carFloor += S.moveDir;
+    if (S.inside) applyHall();
+    refresh3D(); renderUI();
+  }
+  await wait(0.4); // 止まる
+  S.moving = false;
+  S.moveDir = 0;
+  refresh3D();
+}
+
+// ---------- 音 ----------
+let actx = null;
+function tone(freq, dur, when = 0, type = 'sine', vol = 0.2) {
+  try {
+    actx ??= new AudioContext();
+    const t = actx.currentTime + when;
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g).connect(actx.destination);
+    o.start(t); o.stop(t + dur + 0.05);
+  } catch { /* 音が出せない環境では無視 */ }
+}
+const beep = () => tone(1046, 0.12, 0, 'triangle', 0.12);
+const chime = () => { tone(784, 1.0, 0, 'sine', 0.25); tone(659, 1.3, 0.45, 'sine', 0.25); };
+
+// ============================================================
+// 状態遷移
+// ============================================================
+function available() {
+  const calls = () => [
+    ...(S.playerFloor < TOP ? ['call:up'] : []),
+    ...(S.playerFloor > 0 ? ['call:down'] : []),
+  ];
+  const floors = () => FLOORS.map((_, i) => i).filter(i => i !== S.carFloor).reverse().map(i => `floor:${i}`);
+  switch (S.phase) {
+    case 'OUT_IDLE':
+    case 'OUT_WAITING':
+    case 'OUT_CLOSING': return calls();
+    case 'OUT_ARRIVED': return ['board'];
+    case 'IN_STOPPED': return [...floors(), 'close', 'alight'];
+    case 'IN_CLOSED': return [...floors(), 'open', 'alight'];
+    case 'IN_ARRIVED': return [...floors(), 'close', 'alight', 'stay'];
+    case 'IN_CLOSING': return ['open'];
+    default: return [];
+  }
+}
+const isEnabled = a => available().includes(a);
+function setPhase(p) { S.phase = p; refresh3D(); renderUI(); }
+
+// なかで扉を閉める。閉まりきったら true、「開」で中断されたら false
+async function closeInside() {
+  setPhase('IN_CLOSING');
+  return closeDoors();
+}
+async function reopenInside() {
+  S.doorBtnLit = 'open';
+  setPhase('BUSY');
+  await openDoors();
+  S.doorBtnLit = null;
+}
+
+async function doAction(a) {
+  if (!isEnabled(a)) return;
+  beep();
+  const [kind, arg] = a.split(':');
+
+  if (kind === 'call') {
+    S.callLit[arg] = true;
+    refresh3D(); renderUI();
+    if (S.phase === 'OUT_CLOSING') { closingJob?.cancel(); return; } // 開け直しは alight 側が行う
+    if (S.phase !== 'OUT_IDLE') return; // すでに呼んでいる（移動中）
+    if (S.carFloor === S.playerFloor) {
+      setPhase('BUSY');
+    } else {
+      setPhase('OUT_WAITING');
+      await moveCar(S.playerFloor);
+      chime();
+    }
+    await openDoors();
+    S.callLit.up = S.callLit.down = false;
+    setPhase('OUT_ARRIVED');
+  }
+
+  else if (kind === 'board') {
+    setPhase('BOARDING');
+    await moveCam({ x: 0, z: -1.25, yaw: 0, pitch: -0.05 }, 1.6);
+    S.inside = true;
+    await moveCam({ x: 0.25, z: -1.88, yaw: Math.PI - 0.4, pitch: 0.06 }, 1.2);
+    setPhase('IN_STOPPED');
+  }
+
+  else if (kind === 'floor') {
+    S.target = Number(arg);
+    // 閉まる途中で「開」が押されたら、開け直してから少し待って、もう一度閉める
+    while (!(await closeInside())) {
+      await reopenInside();
+      setPhase('BUSY');
+      await wait(1.5);
+    }
+    setPhase('IN_MOVING');
+    await moveCar(S.target);
+    chime();
+    await openDoors();
+    S.target = null;
+    setPhase('IN_ARRIVED');
+  }
+
+  else if (kind === 'open' && S.phase === 'IN_CLOSING') {
+    closingJob?.cancel(); // 開け直しは closeInside を呼んだ側が行う
+  }
+
+  else if (kind === 'open') {
+    S.doorBtnLit = 'open';
+    setPhase('BUSY');
+    await openDoors();
+    S.doorBtnLit = null;
+    setPhase('IN_STOPPED');
+  }
+
+  else if (kind === 'close' || kind === 'stay') {
+    if (kind === 'close') S.doorBtnLit = 'close';
+    if (await closeInside()) {
+      S.doorBtnLit = null;
+      setPhase('IN_CLOSED');
+    } else {
+      await reopenInside();
+      setPhase('IN_STOPPED');
+    }
+  }
+
+  else if (kind === 'alight') {
+    setPhase('ALIGHTING');
+    if (S.door < 1) await openDoors();
+    await moveCam({ x: 0, z: -1.3, yaw: Math.PI, pitch: -0.05 }, 0.7);
+    await moveCam({ z: 2.3 }, 1.5);
+    S.inside = false;
+    S.playerFloor = S.carFloor;
+    applyHall();
+    await moveCam({ z: OUT_POS.z, yaw: Math.PI * 2, pitch: OUT_POS.pitch }, 1.1);
+    rig.yaw = 0;
+    await wait(0.6);
+    // 閉まる途中で うえ/した が押されたら開け直す（何度でも）
+    setPhase('OUT_CLOSING');
+    if (await closeDoors()) {
+      setPhase('OUT_IDLE');
+    } else {
+      setPhase('BUSY');
+      await openDoors();
+      S.callLit.up = S.callLit.down = false;
+      setPhase('OUT_ARRIVED');
+    }
+  }
+}
+
+// ============================================================
+// 画面下のボタン表示エリア
+// ============================================================
+const controls = document.getElementById('controls');
+const whereEl = document.getElementById('where');
+const statusEl = document.getElementById('status');
+
+const STATUS = {
+  OUT_IDLE: () => S.carFloor === S.playerFloor
+    ? 'エレベーターは ここに いるよ。ボタンを おしてね'
+    : 'うえ か した の ボタンで エレベーターを よぼう！',
+  OUT_CLOSING: () => 'とびらが しまるよ（うえ・した で あけなおせるよ）',
+  OUT_WAITING: () => 'エレベーターが くるのを まってね…',
+  OUT_ARRIVED: () => 'エレベーターが きたよ！ のってみよう',
+  BOARDING: () => 'エレベーターに のるよ',
+  IN_STOPPED: () => 'いきたい かいの ボタンを おしてね',
+  IN_CLOSED: () => 'いきたい かいの ボタンを おしてね',
+  IN_MOVING: () => `${FLOORS[S.target]} に むかって うごいているよ…`,
+  IN_ARRIVED: () => `${FLOORS[S.carFloor]}（${kana(FLOORS[S.carFloor])}）に ついたよ！`,
+  ALIGHTING: () => 'エレベーターから おりるよ',
+  IN_CLOSING: () => (S.target !== null ? `${FLOORS[S.target]} に いくよ。` : '') + 'とびらが しまるよ（「ひらく」で あけなおせるよ）',
+  BUSY: () => 'ちょっと まってね',
+};
+
+function renderUI() {
+  whereEl.textContent = `いま：${FLOORS[hallFloor()]}・エレベーターの${S.inside ? 'なか' : 'そと'}`;
+  statusEl.textContent = STATUS[S.phase]();
+
+  controls.innerHTML = '';
+  const acts = available();
+  if (!acts.length) {
+    const p = document.createElement('div');
+    p.className = 'waiting';
+    p.textContent = '（いまは おせる ボタンは ないよ）';
+    controls.append(p);
+    return;
+  }
+  const btnGroup = document.createElement('div'); btnGroup.className = 'group';
+  const doorGroup = document.createElement('div'); doorGroup.className = 'group';
+  const actGroup = document.createElement('div'); actGroup.className = 'group';
+  for (const a of acts) {
+    const [kind, arg] = a.split(':');
+    const b = document.createElement('button');
+    b.className = 'b';
+    if (kind === 'call') {
+      b.classList.add('call');
+      if (S.callLit[arg]) b.classList.add('lit');
+      b.innerHTML = arg === 'up' ? '<span class="arrow">▲</span>うえ' : '<span class="arrow">▼</span>した';
+      btnGroup.append(b);
+    } else if (kind === 'open' || kind === 'close') {
+      b.classList.add('door');
+      b.innerHTML = kind === 'open' ? '<span class="arrow">◀▶</span>ひらく' : '<span class="arrow">▶◀</span>とじる';
+      doorGroup.append(b);
+    } else if (kind === 'floor') {
+      b.classList.add('floor');
+      b.textContent = FLOORS[Number(arg)];
+      btnGroup.append(b);
+    } else {
+      b.classList.add('action', kind);
+      b.textContent = { board: 'エレベーターにのる', alight: 'エレベーターからおりる', stay: 'エレベーターからおりない' }[kind];
+      actGroup.append(b);
+    }
+    b.addEventListener('click', () => doAction(a));
+  }
+  controls.append(...[btnGroup, doorGroup, actGroup].filter(g => g.children.length));
+}
+
+// ============================================================
+// 3D 上のボタンをクリック
+// ============================================================
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+function pick(ev) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const zone = S.inside ? 'in' : 'out';
+  const targets = clickables.filter(m => m.visible && m.userData.zone === zone);
+  const hit = raycaster.intersectObjects(targets, false)[0];
+  return hit ? hit.object.userData.action : null;
+}
+renderer.domElement.addEventListener('pointerdown', ev => { const a = pick(ev); if (a) doAction(a); });
+renderer.domElement.addEventListener('pointermove', ev => {
+  const a = pick(ev);
+  renderer.domElement.style.cursor = a && isEnabled(a) ? 'pointer' : 'default';
+});
+
+// ============================================================
+// ループ
+// ============================================================
+function loop(now) {
+  requestAnimationFrame(loop);
+  updateTweens(now);
+  car.visible = S.inside || (!S.moving && S.carFloor === S.playerFloor);
+  doorL.position.x = -0.3 - 0.6 * S.door;
+  doorR.position.x = 0.3 + 0.6 * S.door;
+  camera.position.set(rig.x, rig.y, rig.z);
+  if (S.inside && S.moving) camera.position.y += Math.sin(now * 0.045) * 0.0018 + (Math.random() - 0.5) * 0.0012;
+  camera.rotation.set(rig.pitch, rig.yaw, 0);
+  renderer.render(scene, camera);
+}
+
+// デバッグ・確認用
+window.__elevator = { S, doAction, available };
+
+resize();
+applyHall();
+refresh3D();
+renderUI();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
