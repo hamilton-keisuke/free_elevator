@@ -132,6 +132,7 @@ const S = {
   climbDir: 0,
   playerFloor: FLOORS.indexOf(CONFIG.playerStartFloor),
   carFloor: FLOORS.indexOf(CONFIG.elevatorStartFloor),
+  carPos: FLOORS.indexOf(CONFIG.elevatorStartFloor), // かごの位置（階の途中も表せる小数）
   moving: false,
   moveDir: 0,
   target: null,
@@ -434,6 +435,10 @@ car.add(box(0.04, 0.04, 1.5, railMat, 0.84, 0.95, -1.15));
 const carLight = new THREE.PointLight(0xfff4e0, 6, 0, 2);
 carLight.position.set(0, 2.2, -1.1);
 car.add(carLight);
+// かごの屋根と床下（上下から近づいてくるときに、かごの形が見えるように）
+const carShellMat = std('#4a4d55');
+car.add(box(1.8, 0.25, 1.8, carShellMat, 0, 2.53, -1.1));
+car.add(box(1.8, 0.25, 1.8, carShellMat, 0, -0.13, -1.1));
 
 // なかの表示器（扉の上・内側）
 const inIndicator = canvasTex(256, 128, drawIndicator);
@@ -518,7 +523,8 @@ const shaftOutTex = shaftTex.tex.clone();
 shaftOutTex.needsUpdate = true;
 const shaftOut = plane(2.4, 3.2, new THREE.MeshBasicMaterial({ map: shaftOutTex, color: 0x777777 }), 0, 1.4, -2.3);
 scene.add(shaftOut);
-let shaftSpeed = 0, lastNow = 0;
+let lastCarPos = S.carPos, lastNow = 0;
+const SHAFT_FLOOR_H = 3.2; // そとから見たときの昇降路1階ぶんの高さ
 
 // ============================================================
 // 見た目の更新
@@ -610,14 +616,20 @@ async function moveCar(target) {
   S.moving = true;
   S.moveDir = Math.sign(target - S.carFloor);
   refresh3D(); renderUI();
-  await wait(0.4); // 動き出し
+  await wait(0.3);
+  const start = S.carFloor;
+  // かごの位置(carPos)を少しずつ動かす。動き出しはゆっくり加速、最後の1階はゆっくり減速
   while (S.carFloor !== target) {
-    await wait(CONFIG.secondsPerFloor);
-    S.carFloor += S.moveDir;
+    const from = S.carFloor, to = from + S.moveDir;
+    const first = from === start, last = to === target;
+    const ease = first && last ? easeInOut : first ? (p => p * p) : last ? (p => 1 - (1 - p) * (1 - p)) : (p => p);
+    await tween(CONFIG.secondsPerFloor * (first || last ? 1.4 : 1), p => { S.carPos = from + (to - from) * p; }, ease);
+    S.carFloor = to;
+    S.carPos = to;
     if (S.inside) applyHall();
     refresh3D(); renderUI();
   }
-  await wait(0.4); // 止まる
+  await wait(0.3);
   S.moving = false;
   S.moveDir = 0;
   refresh3D();
@@ -945,15 +957,18 @@ function loop(now) {
   requestAnimationFrame(loop);
   updateTweens(now);
   const dt = Math.min(0.1, (now - lastNow) / 1000); lastNow = now;
-  car.visible = S.inside || (!S.moving && S.carFloor === S.playerFloor);
+  // そとから見ると、かごは昇降路の中を実際に上下する（近づくと扉の窓から見えてくる）
+  const carOffset = S.carPos - S.playerFloor;
+  car.position.y = S.inside ? 0 : carOffset * SHAFT_FLOOR_H;
+  car.visible = S.inside || Math.abs(carOffset) < 1;
   // 移動中のなか: ホールの代わりに昇降路の壁を見せて、窓の景色を流す
   const inShaft = S.inside && S.moving;
   hall.visible = !inShaft;
   shaftIn.visible = inShaft;
-  shaftOut.visible = !car.visible;
-  const targetSpeed = inShaft ? S.moveDir * FLOOR_HEIGHT / CONFIG.secondsPerFloor : 0;
-  shaftSpeed += (targetSpeed - shaftSpeed) * Math.min(1, dt * 3);
-  shaftTex.tex.offset.y += shaftSpeed * dt / FLOOR_HEIGHT;
+  shaftOut.visible = !S.inside;
+  // なかから見る昇降路の壁は、かごが動いたぶんだけ流す（テクスチャ1枚 = 1階）
+  shaftTex.tex.offset.y += S.carPos - lastCarPos;
+  lastCarPos = S.carPos;
   stairLight.position.set(-6.6, rig.y + 1.4, 3.4);
   // 踊り場の表示は、階の床からだと階段や手すりに半分かくれて見えてしまうので、上り下りしている間だけ表示
   for (const L of levels) L.signMesh.visible = S.phase === 'CLIMBING';
