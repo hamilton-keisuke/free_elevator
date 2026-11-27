@@ -530,17 +530,34 @@ scene.add(doorL, doorR);
 // ============================================================
 // 昇降路（窓のむこうに見える壁）
 // ============================================================
-const FLOOR_HEIGHT = 3; // m（窓から見える景色の流れる速さに使う）
-const shaftTex = canvasTex(256, 512, (ctx, w, h) => {
+const FLOOR_HEIGHT = 3.2; // m（なかから見る昇降路の壁: テクスチャ1枚 = 1階ぶん）
+// 昇降路の壁の絵。v（下=0, 上=1）と高さ y の関係: v = (y + 0.8) / FLOOR_HEIGHT（かごが階にぴったり止まったとき）
+//   床 y=0 → v=0.25 / かごの窓 y=1.0..2.0 → v=0.5625..0.875
+// withLights=true のときは、各階の乗り場の扉と、その窓からもれるホールの明かりも描く
+function drawShaft(ctx, w, h, withLights) {
+  const row = y => (1 - (y + 0.8) / FLOOR_HEIGHT) * h;   // 高さ y → canvas の行
+  const col = x => (0.5 + x / 3) * w;                   // 横位置 x（壁の幅3m）→ canvas の列
   ctx.fillStyle = '#3a3d43'; ctx.fillRect(0, 0, w, h);
   for (let i = 0; i < 900; i++) {           // コンクリートのざらつき
     ctx.fillStyle = `rgba(${Math.random() < 0.5 ? '0,0,0' : '255,255,255'},${Math.random() * 0.06})`;
     ctx.fillRect(Math.random() * w, Math.random() * h, 3, 3);
   }
-  ctx.fillStyle = '#6b6f78'; ctx.fillRect(0, h * 0.86, w, h * 0.08);   // 各階の床スラブ
-  ctx.fillStyle = '#25272c'; ctx.fillRect(0, h * 0.94, w, h * 0.01);
-  ctx.fillStyle = '#ffcc33'; ctx.fillRect(0, h * 0.84, w, h * 0.015); // 黄色い目印
-});
+  ctx.fillStyle = '#6b6f78'; ctx.fillRect(0, row(0), w, row(-0.3) - row(0));     // 各階の床スラブ
+  ctx.fillStyle = '#25272c'; ctx.fillRect(0, row(-0.3), w, h * 0.01);
+  ctx.fillStyle = '#ffcc33'; ctx.fillRect(0, row(0.05), w, row(0) - row(0.05));  // 黄色い目印
+  if (!withLights) return;
+  // 乗り場の扉（裏側）
+  ctx.fillStyle = '#5d636c'; ctx.fillRect(col(-0.6), row(2.2), col(0.6) - col(-0.6), row(0) - row(2.2));
+  // 扉の窓からもれるホールの明かり（かごの窓とぴったり重なる位置）
+  ctx.save();
+  ctx.shadowColor = '#ffe7a8'; ctx.shadowBlur = 24;
+  ctx.fillStyle = '#fff4d8';
+  for (const [x0, x1] of [[-0.43, -0.09], [0.09, 0.43]]) {
+    ctx.fillRect(col(x0), row(2.02), col(x1) - col(x0), row(0.98) - row(2.02));
+  }
+  ctx.restore();
+}
+const shaftTex = canvasTex(256, 512, (ctx, w, h) => drawShaft(ctx, w, h, true));
 shaftTex.redraw();
 shaftTex.tex.wrapS = shaftTex.tex.wrapT = THREE.RepeatWrapping;
 // なかから見る昇降路の壁（移動中だけ表示。ホールの代わり）
@@ -548,11 +565,11 @@ const shaftIn = plane(3, 4, new THREE.MeshBasicMaterial({ map: shaftTex.tex }), 
 shaftTex.tex.repeat.set(1, 4 / FLOOR_HEIGHT);
 scene.add(shaftIn);
 // そとから見る昇降路の奥の壁（かごがいないとき）
-const shaftOutTex = shaftTex.tex.clone();
-shaftOutTex.needsUpdate = true;
-const shaftOut = plane(2.4, 3.2, new THREE.MeshBasicMaterial({ map: shaftOutTex, color: 0x777777 }), 0, 1.4, -2.3);
+const shaftOutTex = canvasTex(256, 512, (ctx, w, h) => drawShaft(ctx, w, h, false));
+shaftOutTex.redraw();
+const shaftOut = plane(2.4, 3.2, new THREE.MeshBasicMaterial({ map: shaftOutTex.tex, color: 0x777777 }), 0, 1.4, -2.3);
 scene.add(shaftOut);
-let lastCarPos = S.carPos, lastNow = 0;
+let lastNow = 0;
 const SHAFT_FLOOR_H = 3.2; // そとから見たときの昇降路1階ぶんの高さ
 
 // ============================================================
@@ -996,8 +1013,7 @@ function loop(now) {
   shaftIn.visible = inShaft;
   shaftOut.visible = !S.inside;
   // なかから見る昇降路の壁は、かごが動いたぶんだけ流す（テクスチャ1枚 = 1階）
-  shaftTex.tex.offset.y += S.carPos - lastCarPos;
-  lastCarPos = S.carPos;
+  shaftTex.tex.offset.y = S.carPos; // 階にぴったりのとき、各階の明かりがかごの窓に重なる
   stairLight.position.set(-6.6, rig.y + 1.4, 3.4);
   // 踊り場の表示は、階の床からだと階段や手すりに半分かくれて見えてしまうので、上り下りしている間だけ表示
   for (const L of levels) L.signMesh.visible = S.phase === 'CLIMBING';
