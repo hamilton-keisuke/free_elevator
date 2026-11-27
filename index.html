@@ -231,11 +231,11 @@ const hall = new THREE.Group(); scene.add(hall);
 const hallWallMat = std(FLOOR_COLORS[1]);
 const hallFloorMat = std('#7b808b');
 hall.add(plane(8, 8.1, hallFloorMat, 0, 0, 3.95, -Math.PI / 2));
-hall.add(plane(8, 8.1, std('#f4f4f4'), 0, 3.2, 3.95, Math.PI / 2));
-// 左の壁（かいだんへの入口 z 2.6..4.2 があいている）
-hall.add(box(0.2, 4.0, 2.7, hallWallMat, -4.1, 2.0, 1.25));
-hall.add(box(0.2, 4.0, 3.8, hallWallMat, -4.1, 2.0, 6.1));
-hall.add(box(0.2, 1.6, 1.6, hallWallMat, -4.1, 3.2, 3.4));
+hall.add(plane(8, 8.1, new THREE.MeshBasicMaterial({ color: 0xdcdcdc }), 0, 3.2, 3.95, Math.PI / 2)); // 天井（照明のテカリが出ないように光の影響を受けない素材）
+// 左の壁（かいだんへの入口 z 2.9..3.9・高さ2.4m があいている）
+hall.add(box(0.2, 4.0, 3.0, hallWallMat, -4.1, 2.0, 1.4));
+hall.add(box(0.2, 4.0, 4.1, hallWallMat, -4.1, 2.0, 5.95));
+hall.add(box(0.2, 1.6, 1.0, hallWallMat, -4.1, 3.2, 3.4));
 hall.add(plane(8.1, 3.2, hallWallMat, 4, 1.6, 3.95, 0, -Math.PI / 2));
 hall.add(plane(8, 3.2, hallWallMat, 0, 1.6, 8, 0, Math.PI));
 // 正面の壁（扉の穴: x -0.6..0.6, y 0..2.2）
@@ -310,7 +310,21 @@ const SH_BOTTOM = -8, SH_TOP = 10, SH_H = SH_TOP - SH_BOTTOM, SH_MID = (SH_TOP +
 stairs.add(plane(-4 - WALL_X, SH_H, stairWallMat, (-4 + WALL_X) / 2, SH_MID, 1.8));               // 右の壁
 stairs.add(plane(-4 - WALL_X, SH_H, stairWallMat, (-4 + WALL_X) / 2, SH_MID, 5.0, 0, Math.PI));   // 左の壁
 stairs.add(plane(3.2, SH_H, stairWallMat, WALL_X, SH_MID, 3.4, 0, Math.PI / 2));                  // 奥の壁
-stairs.add(plane(3.2, SH_H, stairWallMat, -4.22, SH_MID, 3.4, 0, -Math.PI / 2));                  // 手前（ホール側）の壁の裏
+// 手前（ホール側）の壁の裏。いまの階の入口（z 2.9..3.9, y 0..2.4）はあけておく
+const OPEN_Z0 = 2.9, OPEN_Z1 = 3.9, OPEN_H = 2.4;
+stairs.add(plane(3.2, -SH_BOTTOM, stairWallMat, -4.22, SH_BOTTOM / 2, 3.4, 0, -Math.PI / 2));
+stairs.add(plane(3.2, SH_TOP - OPEN_H, stairWallMat, -4.22, (SH_TOP + OPEN_H) / 2, 3.4, 0, -Math.PI / 2));
+stairs.add(plane(OPEN_Z0 - 1.8, OPEN_H, stairWallMat, -4.22, OPEN_H / 2, (1.8 + OPEN_Z0) / 2, 0, -Math.PI / 2));
+stairs.add(plane(5.0 - OPEN_Z1, OPEN_H, stairWallMat, -4.22, OPEN_H / 2, (OPEN_Z1 + 5.0) / 2, 0, -Math.PI / 2));
+// 入口の枠（x の位置を変えて、ホール側・かいだん側の両方に付ける）
+function doorFrame(x, y0) {
+  const g = new THREE.Group();
+  g.add(box(0.06, OPEN_H + 0.06, 0.08, trimMat, x, y0 + (OPEN_H + 0.06) / 2, OPEN_Z0 - 0.04));
+  g.add(box(0.06, OPEN_H + 0.06, 0.08, trimMat, x, y0 + (OPEN_H + 0.06) / 2, OPEN_Z1 + 0.04));
+  g.add(box(0.06, 0.08, OPEN_Z1 - OPEN_Z0 + 0.16, trimMat, x, y0 + OPEN_H + 0.04, 3.4));
+  return g;
+}
+hall.add(doorFrame(-3.98, 0));
 stairs.add(plane(-4 - WALL_X, 3.2, std('#55585e'), (-4 + WALL_X) / 2, SH_BOTTOM, 3.4, -Math.PI / 2));
 
 // 階ごとの部品（level = いまの階からの差 -1, 0, +1）
@@ -352,8 +366,9 @@ function makeLevel(k) {
   // ホールへの入口（level 0 は本物のホールが見える。上下の階は入口の向こうを色で表現）
   if (k !== 0) {
     L.doorMat = std(FLOOR_COLORS[0]);
-    L.all.add(plane(1.6, 2.4, L.doorMat, -4.215, y0 + 1.2, 3.4, 0, -Math.PI / 2));
+    L.all.add(plane(OPEN_Z1 - OPEN_Z0, OPEN_H, L.doorMat, -4.215, y0 + OPEN_H / 2, 3.4, 0, -Math.PI / 2));
   }
+  L.all.add(doorFrame(-4.25, y0));
   // 踊り場の表示（奥の壁のまんなか）: この踊り場から のぼると f+1、おりると f
   L.sign = canvasTex(512, 256, (ctx, w, h) => {
     const i = S.playerFloor + k;
@@ -548,7 +563,7 @@ function updateTweens(now) {
 }
 
 const OUT_POS = { x: 0, y: 1.5, z: 3.4, yaw: 0, pitch: -0.03 };
-const STAIRS_POS = { x: -4.3, y: 1.5, z: 3.4, yaw: Math.PI / 2, pitch: -0.2 };
+const STAIRS_POS = { x: -5.0, y: 1.5, z: 3.4, yaw: Math.PI / 2, pitch: -0.2 };
 const rig = { ...OUT_POS };
 
 // 半階ぶんの階段を歩く（足音つき）
