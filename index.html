@@ -320,6 +320,10 @@ car.add(openBtn, closeBtn);
 const doorMat = std('#b9c0ca', { metalness: 0.2, roughness: 0.7 });
 const doorL = box(0.6, 2.2, 0.04, doorMat, -0.3, 1.1, -0.15);
 const doorR = box(0.6, 2.2, 0.04, doorMat, 0.3, 1.1, -0.15);
+// 扉の合わせ目（閉まっているときに2枚の扉の切れ目が見えるように、内側の縁に濃い線を入れる）
+const seamMat = new THREE.MeshBasicMaterial({ color: 0x2a2e35 });
+doorL.add(box(0.006, 2.2, 0.044, seamMat, 0.297, 0, 0));
+doorR.add(box(0.006, 2.2, 0.044, seamMat, -0.297, 0, 0));
 scene.add(doorL, doorR);
 
 // ============================================================
