@@ -194,10 +194,10 @@ function drawIndicator(ctx, w, h) {
   ctx.fillStyle = '#ff9a1f';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.font = `bold 84px ${FONT}`;
-  ctx.fillText(short(FLOORS[S.carFloor]), w * 0.6, h * 0.54);
+  ctx.fillText(short(FLOORS[S.carFloor]), w * 0.5, h * 0.54);   // 階数はまんなか
   if (S.moving) {
-    ctx.font = `bold 64px ${FONT}`;
-    ctx.fillText(S.moveDir > 0 ? '▲' : '▼', w * 0.2, h * 0.54);
+    ctx.font = `bold 56px ${FONT}`;
+    ctx.fillText(S.moveDir > 0 ? '▲' : '▼', w * 0.15, h * 0.54); // 向きは左はし
   }
 }
 
@@ -282,6 +282,109 @@ const downBtn = makeButton('▼', 0.055, 'call:down', 'out');
 upBtn.position.set(0.95, 1.23, 0.125);
 downBtn.position.set(0.95, 1.07, 0.125);
 hall.add(upBtn, downBtn);
+
+// ============================================================
+// かいだんと反対側（右の壁）の飾り: 1F は げんかんの自動ドア、R は おくじょうへのドア（絵だけ）
+// ============================================================
+const sideX = 3.99;                         // 右の壁（x=4）の少し手前
+const onRightWall = (w, h, mat, y, z, dx = 0) => plane(w, h, mat, sideX - dx, y, z, 0, -Math.PI / 2);
+const alumMat = std('#5b6068', { metalness: 0.4, roughness: 0.4 });
+const steelDoorMat = std('#8f98a3', { metalness: 0.3, roughness: 0.5 });
+const glassTint = new THREE.MeshBasicMaterial({ color: 0xbfe0f0, transparent: true, opacity: 0.18, depthWrite: false });
+// 右の壁に貼る棒（枠）: 縦なら (z, y0, y1)、横なら (y, z0, z1)
+const vBar = (mat, z, y0, y1, t = 0.06) => box(0.05, y1 - y0, t, mat, sideX - 0.03, (y0 + y1) / 2, z);
+const hBar = (mat, y, z0, z1, t = 0.06) => box(0.05, t, z1 - z0, mat, sideX - 0.03, y, (z0 + z1) / 2);
+function labelTex(text, bg, fg, w = 512, h = 128, size = 64) {
+  const t = canvasTex(w, h, (ctx) => {
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = fg; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `bold ${size}px ${FONT}`; ctx.fillText(text, w / 2, h / 2 + 4);
+  });
+  t.redraw();
+  return t.tex;
+}
+
+// ---------- 1F: げんかんの自動ドア ----------
+const entrance = new THREE.Group(); hall.add(entrance);
+{
+  const Z0 = 2.2, Z1 = 4.6, H = 2.6, DOOR_Y = 2.2;   // 幅2.4m・高さ2.6m（上の 2.2〜2.6m は らんま）
+  const outside = canvasTex(1024, 1024, (ctx, w, h) => {
+    const g = ctx.createLinearGradient(0, 0, 0, h * 0.6);
+    g.addColorStop(0, '#7cc4f0'); g.addColorStop(1, '#d6eefb');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    // 向かいのビル
+    const bld = [[0.02, 0.28, 0.18, '#c9c2b6'], [0.2, 0.18, 0.16, '#b7c3cc'], [0.38, 0.33, 0.2, '#d8cfc0'], [0.6, 0.22, 0.17, '#aeb8c2'], [0.79, 0.3, 0.2, '#cfc7bb']];
+    for (const [x, top, bw, c] of bld) {
+      ctx.fillStyle = c; ctx.fillRect(x * w, top * h, bw * w, (0.62 - top) * h);
+      ctx.fillStyle = 'rgba(80,110,140,0.35)';
+      for (let yy = top + 0.03; yy < 0.58; yy += 0.06) for (let xx = x + 0.02; xx < x + bw - 0.03; xx += 0.05) ctx.fillRect(xx * w, yy * h, 0.025 * w, 0.03 * h);
+    }
+    ctx.fillStyle = '#6d7178'; ctx.fillRect(0, 0.62 * h, w, 0.1 * h);           // 道路
+    ctx.fillStyle = '#ffffff'; for (let x = 0.03; x < 1; x += 0.14) ctx.fillRect(x * w, 0.665 * h, 0.07 * w, 0.01 * h);
+    ctx.fillStyle = '#c8c1b4'; ctx.fillRect(0, 0.72 * h, w, 0.28 * h);          // 歩道
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)'; ctx.lineWidth = 3;
+    for (let x = 0; x < 1; x += 0.08) { ctx.beginPath(); ctx.moveTo(x * w, 0.72 * h); ctx.lineTo((x - 0.05) * w, h); ctx.stroke(); }
+    // 街路樹
+    for (const x of [0.12, 0.5, 0.88]) {
+      ctx.fillStyle = '#7a5a3a'; ctx.fillRect((x - 0.012) * w, 0.5 * h, 0.024 * w, 0.24 * h);
+      ctx.fillStyle = '#4f9a4a';
+      for (const [dx, dy, r] of [[0, 0.42, 0.09], [-0.06, 0.47, 0.07], [0.06, 0.47, 0.07]]) { ctx.beginPath(); ctx.arc((x + dx) * w, dy * h, r * w, 0, Math.PI * 2); ctx.fill(); }
+    }
+  });
+  outside.redraw();
+  entrance.add(onRightWall(Z1 - Z0, H, new THREE.MeshBasicMaterial({ map: outside.tex }), H / 2, (Z0 + Z1) / 2));
+  entrance.add(onRightWall(Z1 - Z0, H, glassTint, H / 2, (Z0 + Z1) / 2, 0.01));
+  // 枠: 外枠・らんまの横桟・引き戸と はめ殺しの境目・まんなかの合わせ目・下のレール
+  entrance.add(vBar(alumMat, Z0, 0, H, 0.1), vBar(alumMat, Z1, 0, H, 0.1));
+  entrance.add(hBar(alumMat, H, Z0 - 0.05, Z1 + 0.05, 0.1), hBar(alumMat, DOOR_Y, Z0, Z1, 0.08), hBar(alumMat, 0.03, Z0, Z1, 0.06));
+  entrance.add(vBar(alumMat, 2.8, 0, DOOR_Y), vBar(alumMat, 4.0, 0, DOOR_Y));
+  entrance.add(vBar(alumMat, 3.37, 0, DOOR_Y, 0.05), vBar(alumMat, 3.43, 0, DOOR_Y, 0.05));
+  // 「じどうドア」のステッカー
+  const sticker = new THREE.MeshBasicMaterial({ map: labelTex('じどうドア', '#ffffff', '#d23c3c', 512, 128, 72), transparent: true });
+  entrance.add(onRightWall(0.42, 0.1, sticker, 1.2, 3.1, 0.02), onRightWall(0.42, 0.1, sticker, 1.2, 3.7, 0.02));
+  // 上の看板と、足ふきマット
+  entrance.add(onRightWall(1.1, 0.32, new THREE.MeshBasicMaterial({ map: labelTex('げんかん', '#2f5d8a', '#ffffff') }), 2.88, 3.4));
+  entrance.add(plane(0.8, 2.0, std('#3c4a5a'), 3.55, 0.006, 3.4, -Math.PI / 2));
+}
+
+// ---------- R: おくじょうへのドア ----------
+const roofDoor = new THREE.Group(); hall.add(roofDoor);
+{
+  const Z0 = 2.8, Z1 = 4.0, H = 2.1;                   // 両開き（1枚0.6m）
+  const sky = canvasTex(1024, 1024, (ctx, w, h) => {
+    const g = ctx.createLinearGradient(0, 0, 0, h * 0.75);
+    g.addColorStop(0, '#4fa7e8'); g.addColorStop(1, '#cfeaff');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';           // 雲
+    for (const [x, y, r] of [[0.2, 0.18, 0.07], [0.27, 0.16, 0.09], [0.35, 0.19, 0.06], [0.7, 0.3, 0.06], [0.77, 0.28, 0.08], [0.84, 0.31, 0.05]]) { ctx.beginPath(); ctx.arc(x * w, y * h, r * w, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = '#9fb1bf';                          // 遠くの街
+    for (let x = 0; x < 1; x += 0.07) { const t = 0.6 + Math.sin(x * 37) * 0.04; ctx.fillRect(x * w, t * h, 0.065 * w, (0.75 - t) * h); }
+    ctx.fillStyle = '#9aa39a'; ctx.fillRect(0, 0.75 * h, w, 0.25 * h);         // 屋上の床
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = 3;
+    for (let y = 0.8; y < 1; y += 0.06) { ctx.beginPath(); ctx.moveTo(0, y * h); ctx.lineTo(w, y * h); ctx.stroke(); }
+    ctx.strokeStyle = '#5f6b75'; ctx.lineWidth = 8;     // 屋上の柵
+    ctx.beginPath(); ctx.moveTo(0, 0.62 * h); ctx.lineTo(w, 0.62 * h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, 0.68 * h); ctx.lineTo(w, 0.68 * h); ctx.stroke();
+    ctx.lineWidth = 5;
+    for (let x = 0.02; x < 1; x += 0.05) { ctx.beginPath(); ctx.moveTo(x * w, 0.62 * h); ctx.lineTo(x * w, 0.76 * h); ctx.stroke(); }
+  });
+  sky.redraw();
+  roofDoor.add(onRightWall(Z1 - Z0, H, new THREE.MeshBasicMaterial({ map: sky.tex }), H / 2, (Z0 + Z1) / 2));
+  // 扉の金属部分（大きな窓のまわり）: 窓は各扉 0.08m 内側・高さ 0.35〜1.95m
+  const WY0 = 0.35, WY1 = 1.95, WH = WY1 - WY0, WYC = (WY0 + WY1) / 2;
+  for (const [d0, d1] of [[Z0, 3.4], [3.4, Z1]]) {
+    const w0 = d0 + 0.08, w1 = d1 - 0.08;
+    roofDoor.add(onRightWall(d1 - d0, WY0, steelDoorMat, WY0 / 2, (d0 + d1) / 2, 0.005));           // 窓の下
+    roofDoor.add(onRightWall(d1 - d0, H - WY1, steelDoorMat, (WY1 + H) / 2, (d0 + d1) / 2, 0.005)); // 窓の上
+    roofDoor.add(onRightWall(w0 - d0, WH, steelDoorMat, WYC, (d0 + w0) / 2, 0.005));               // 窓の左右
+    roofDoor.add(onRightWall(d1 - w1, WH, steelDoorMat, WYC, (w1 + d1) / 2, 0.005));
+    roofDoor.add(onRightWall(w1 - w0, WH, glassTint, WYC, (w0 + w1) / 2, 0.012));
+    roofDoor.add(box(0.04, 0.03, 0.18, alumMat, sideX - 0.04, 1.0, d0 === Z0 ? 3.27 : 3.53)); // 取っ手
+  }
+  roofDoor.add(vBar(new THREE.MeshBasicMaterial({ color: 0x2a2e35 }), 3.4, 0, H, 0.012)); // 合わせ目
+  roofDoor.add(vBar(alumMat, Z0 - 0.04, 0, H + 0.08, 0.08), vBar(alumMat, Z1 + 0.04, 0, H + 0.08, 0.08), hBar(alumMat, H + 0.04, Z0 - 0.08, Z1 + 0.08, 0.08));
+  roofDoor.add(onRightWall(1.2, 0.32, new THREE.MeshBasicMaterial({ map: labelTex('☀ おくじょう', '#2f8a5a', '#ffffff') }), 2.5, 3.4));
+}
 
 // 「← かいだん」の案内
 const stairsGuide = canvasTex(384, 128, (ctx, w, h) => {
@@ -581,6 +684,8 @@ function applyHall() {
   hallWallMat.color.set(FLOOR_COLORS[i % FLOOR_COLORS.length]);
   floorSign.redraw();
   applyStairs();
+  entrance.visible = FLOORS[i] === '1F';
+  roofDoor.visible = FLOORS[i] === 'R';
   // B1F は上だけ、R は下だけ
   upBtn.visible = i < TOP;
   downBtn.visible = i > 0;
