@@ -264,10 +264,10 @@ downBtn.position.set(0.95, 1.07, 0.125);
 hall.add(upBtn, downBtn);
 
 // ホール照明
-hall.add(new THREE.HemisphereLight(0xffffff, 0x666670, 1.1));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x666670, 1.1));
 const hallLight = new THREE.PointLight(0xffffff, 22, 0, 2);
 hallLight.position.set(0, 3.0, 4.2);
-hall.add(hallLight);
+scene.add(hallLight);
 
 // ============================================================
 // エレベーターのかご
@@ -318,13 +318,64 @@ car.add(openBtn, closeBtn);
 
 // 扉（ホール扉とかご扉を1組で表現）
 const doorMat = std('#b9c0ca', { metalness: 0.2, roughness: 0.7 });
-const doorL = box(0.6, 2.2, 0.04, doorMat, -0.3, 1.1, -0.15);
-const doorR = box(0.6, 2.2, 0.04, doorMat, 0.3, 1.1, -0.15);
-// 扉の合わせ目（閉まっているときに2枚の扉の切れ目が見えるように、内側の縁に濃い線を入れる）
 const seamMat = new THREE.MeshBasicMaterial({ color: 0x2a2e35 });
-doorL.add(box(0.006, 2.2, 0.044, seamMat, 0.297, 0, 0));
-doorR.add(box(0.006, 2.2, 0.044, seamMat, -0.297, 0, 0));
+const glassMat = new THREE.MeshStandardMaterial({
+  color: 0xcfe6f5, transparent: true, opacity: 0.22, roughness: 0.1, depthWrite: false, side: THREE.DoubleSide,
+});
+// 扉1枚（幅0.6・高さ2.2）。縦長の窓つき。inner = 合わせ目側の向き（左扉なら +1）
+function makeDoor(inner) {
+  const g = new THREE.Group();
+  const W = 0.6, H = 2.2, D = 0.04;
+  const wx = inner * 0.04, ww = 0.3;      // 窓の中心x・幅（扉の半分。少し合わせ目寄り）
+  const wy0 = -0.1, wy1 = 0.9;            // 窓の下端・上端（扉中心=床から1.1m からの高さ → 床から1.0m〜2.0m）
+  const xl = wx - ww / 2, xr = wx + ww / 2;
+  g.add(box(xl + W / 2, H, D, doorMat, (-W / 2 + xl) / 2, 0, 0));          // 窓の左側
+  g.add(box(W / 2 - xr, H, D, doorMat, (xr + W / 2) / 2, 0, 0));           // 窓の右側
+  g.add(box(ww, wy0 + H / 2, D, doorMat, wx, (-H / 2 + wy0) / 2, 0));     // 窓の下
+  g.add(box(ww, H / 2 - wy1, D, doorMat, wx, (wy1 + H / 2) / 2, 0));      // 窓の上
+  g.add(plane(ww, wy1 - wy0, glassMat, wx, (wy0 + wy1) / 2, 0));          // ガラス
+  // 窓枠（表と裏）
+  for (const z of [D / 2 + 0.002, -D / 2 - 0.002]) {
+    g.add(box(ww + 0.02, 0.01, 0.004, seamMat, wx, wy0 - 0.005, z));
+    g.add(box(ww + 0.02, 0.01, 0.004, seamMat, wx, wy1 + 0.005, z));
+    g.add(box(0.01, wy1 - wy0, 0.004, seamMat, xl - 0.005, (wy0 + wy1) / 2, z));
+    g.add(box(0.01, wy1 - wy0, 0.004, seamMat, xr + 0.005, (wy0 + wy1) / 2, z));
+  }
+  // 扉の合わせ目（閉まっているときに2枚の扉の切れ目が見えるように、内側の縁に濃い線を入れる）
+  g.add(box(0.006, H, D + 0.004, seamMat, inner * (W / 2 - 0.003), 0, 0));
+  g.position.set(-inner * 0.3, 1.1, -0.15);
+  return g;
+}
+const doorL = makeDoor(1);
+const doorR = makeDoor(-1);
 scene.add(doorL, doorR);
+
+// ============================================================
+// 昇降路（窓のむこうに見える壁）
+// ============================================================
+const FLOOR_HEIGHT = 3; // m（窓から見える景色の流れる速さに使う）
+const shaftTex = canvasTex(256, 512, (ctx, w, h) => {
+  ctx.fillStyle = '#3a3d43'; ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 900; i++) {           // コンクリートのざらつき
+    ctx.fillStyle = `rgba(${Math.random() < 0.5 ? '0,0,0' : '255,255,255'},${Math.random() * 0.06})`;
+    ctx.fillRect(Math.random() * w, Math.random() * h, 3, 3);
+  }
+  ctx.fillStyle = '#6b6f78'; ctx.fillRect(0, h * 0.86, w, h * 0.08);   // 各階の床スラブ
+  ctx.fillStyle = '#25272c'; ctx.fillRect(0, h * 0.94, w, h * 0.01);
+  ctx.fillStyle = '#ffcc33'; ctx.fillRect(0, h * 0.84, w, h * 0.015); // 黄色い目印
+});
+shaftTex.redraw();
+shaftTex.tex.wrapS = shaftTex.tex.wrapT = THREE.RepeatWrapping;
+// なかから見る昇降路の壁（移動中だけ表示。ホールの代わり）
+const shaftIn = plane(3, 4, new THREE.MeshBasicMaterial({ map: shaftTex.tex }), 0, 1.2, 0.05, 0, Math.PI);
+shaftTex.tex.repeat.set(1, 4 / FLOOR_HEIGHT);
+scene.add(shaftIn);
+// そとから見る昇降路の奥の壁（かごがいないとき）
+const shaftOutTex = shaftTex.tex.clone();
+shaftOutTex.needsUpdate = true;
+const shaftOut = plane(2.4, 3.2, new THREE.MeshBasicMaterial({ map: shaftOutTex, color: 0x777777 }), 0, 1.4, -2.3);
+scene.add(shaftOut);
+let shaftSpeed = 0, lastNow = 0;
 
 // ============================================================
 // 見た目の更新
@@ -655,7 +706,16 @@ renderer.domElement.addEventListener('pointermove', ev => {
 function loop(now) {
   requestAnimationFrame(loop);
   updateTweens(now);
+  const dt = Math.min(0.1, (now - lastNow) / 1000); lastNow = now;
   car.visible = S.inside || (!S.moving && S.carFloor === S.playerFloor);
+  // 移動中のなか: ホールの代わりに昇降路の壁を見せて、窓の景色を流す
+  const inShaft = S.inside && S.moving;
+  hall.visible = !inShaft;
+  shaftIn.visible = inShaft;
+  shaftOut.visible = !car.visible;
+  const targetSpeed = inShaft ? S.moveDir * FLOOR_HEIGHT / CONFIG.secondsPerFloor : 0;
+  shaftSpeed += (targetSpeed - shaftSpeed) * Math.min(1, dt * 3);
+  shaftTex.tex.offset.y += shaftSpeed * dt / FLOOR_HEIGHT;
   doorL.position.x = -0.3 - 0.6 * S.door;
   doorR.position.x = 0.3 + 0.6 * S.door;
   camera.position.set(rig.x, rig.y, rig.z);
