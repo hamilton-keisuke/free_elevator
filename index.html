@@ -60,6 +60,7 @@
   button.lit { background: var(--lit); color: #fff; box-shadow: 0 0 14px var(--lit), 0 4px 0 rgba(0,0,0,.35); }
   button.action { padding: 16px 26px; font-size: 20px; font-weight: bold; color: #fff; }
   button.board { background: var(--board); }
+  button.skip { background: var(--stay); }
   button.alight { background: var(--alight); }
   button.stay { background: var(--stay); }
   button.nav { padding: 14px 18px; font-size: 18px; font-weight: bold; color: #fff; background: #7a5cc7; line-height: 1.2; }
@@ -112,7 +113,7 @@ const kana = f => f === 'R' ? 'おくじょう'
 //  OUT_IDLE     そと・エレベーター停止中（待ち）      押せる: そとのボタン
 //  OUT_WAITING  そと・エレベーター移動中（待ち）      押せる: そとのボタン
 //  OUT_CLOSING  そと・おりた後に扉が閉まる途中        押せる: そとのボタン（開け直す）
-//  OUT_ARRIVED  そと・エレベーター到着（扉ひらき）    押せる: のる
+//  OUT_ARRIVED  そと・エレベーター到着（扉ひらき）    押せる: のる, のらない
 //  BOARDING     のっている途中                        押せる: なし
 //  IN_STOPPED   なか・停止中（扉ひらき）              押せる: 階ボタン, 閉, おりる
 //  IN_ARRIVED   なか・目的階に到着（扉ひらき）        押せる: 階ボタン, 閉, おりる, おりない
@@ -658,7 +659,7 @@ function available() {
       ...(S.playerFloor > 0 ? ['climb:down'] : []),
       'go_hall',
     ];
-    case 'OUT_ARRIVED': return ['board'];
+    case 'OUT_ARRIVED': return ['board', 'skip'];
     case 'IN_STOPPED': return [...floors(), 'close', 'alight'];
     case 'IN_CLOSED': return [...floors(), 'open', 'alight'];
     case 'IN_ARRIVED': return [...floors(), 'close', 'alight', 'stay'];
@@ -806,16 +807,25 @@ async function doAction(a) {
     await moveCam({ z: OUT_POS.z, yaw: Math.PI * 2, pitch: OUT_POS.pitch }, 1.1);
     rig.yaw = 0;
     await wait(0.6);
-    // 閉まる途中で うえ/した が押されたら開け直す（何度でも）
-    setPhase('OUT_CLOSING');
-    if (await closeDoors()) {
-      setPhase('OUT_IDLE');
-    } else {
-      setPhase('BUSY');
-      await openDoors();
-      S.callLit.up = S.callLit.down = false;
-      setPhase('OUT_ARRIVED');
-    }
+    await closeOutside();
+  }
+
+  else if (kind === 'skip') {
+    // のらない: そのまま扉が閉まる（閉まる途中に うえ/した で開け直せる）
+    await closeOutside();
+  }
+}
+
+// そとから見て扉を閉める。閉まる途中で うえ/した が押されたら開け直す（何度でも）
+async function closeOutside() {
+  setPhase('OUT_CLOSING');
+  if (await closeDoors()) {
+    setPhase('OUT_IDLE');
+  } else {
+    setPhase('BUSY');
+    await openDoors();
+    S.callLit.up = S.callLit.down = false;
+    setPhase('OUT_ARRIVED');
   }
 }
 
@@ -899,7 +909,7 @@ function renderUI() {
       btnGroup.append(b);
     } else {
       b.classList.add('action', kind);
-      b.textContent = { board: 'エレベーターにのる', alight: 'エレベーターからおりる', stay: 'エレベーターからおりない' }[kind];
+      b.textContent = { board: 'エレベーターにのる', skip: 'エレベーターにのらない', alight: 'エレベーターからおりる', stay: 'エレベーターからおりない' }[kind];
       actGroup.append(b);
     }
     b.addEventListener('click', () => doAction(a));
