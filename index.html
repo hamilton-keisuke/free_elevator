@@ -74,7 +74,10 @@
   }
 </style>
 <script type="importmap">
-  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+  { "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  } }
 </script>
 </head>
 <body>
@@ -88,6 +91,7 @@
 
 <script type="module">
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // ============================================================
 // 設定（将来は設定画面から変更できるようにする想定）
@@ -304,7 +308,10 @@ const stairWallMat = std('#d4d2cb', { side: THREE.DoubleSide });
 const stepMat = std('#a3a6ad');
 const slabMat = std('#8e9198');
 const nosingMat = std('#e0b43a');
-const railMat2 = std('#8a6a43');
+// 手すり: ステンレス風（金属の映り込み用に、手すりだけに部屋の環境マップを使う）
+const metalEnv = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+const railMat2 = new THREE.MeshStandardMaterial({ color: 0xd5d9df, metalness: 0.9, roughness: 0.22, envMap: metalEnv, envMapIntensity: 1.1 });
+const cyl = (r, h, mat, x, y, z) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 16), mat); m.position.set(x, y, z); return m; };
 const stairs = new THREE.Group(); hall.add(stairs);
 
 // 階段室の壁（上下に長い）
@@ -352,18 +359,40 @@ function makeLevel(k) {
   L.down.add(box(0.04, 0.012, FLIGHT_W, nosingMat, SX + 0.02, y0 + 0.006, RIGHT_Z)); // 床の先端
   // 手すり（まんなか）
   const sl = slope(SX - FAR, HALF);
+  const RAIL_H = 0.9;
   for (const [grp, dir] of [[L.up, 1], [L.down, -1]]) {
-    const z = 3.4 + dir * 0.03;
-    const rail = box(sl.len, 0.05, 0.05, railMat2, (SX + FAR) / 2, y0 + 0.9 + dir * HALF / 2, z);
-    rail.rotation.z = -dir * sl.ang;
+    const z = 3.4 + dir * 0.07;              // 各階段の内側の端
+    const railY = x => y0 + RAIL_H + dir * (SX - x) / (SX - FAR) * HALF;
+    // 上の手すり（丸パイプ）
+    const rail = cyl(0.022, sl.len + 0.04, railMat2, (SX + FAR) / 2, y0 + RAIL_H + dir * HALF / 2, z);
+    rail.rotation.z = Math.PI / 2 - dir * sl.ang;
     grp.add(rail);
-    grp.add(box(0.04, 0.9, 0.04, railMat2, SX, y0 + 0.45, z));
-    grp.add(box(0.04, 0.9, 0.04, railMat2, FAR, y0 + dir * HALF + 0.45, z));
+    // 両端の親柱
+    grp.add(cyl(0.025, RAIL_H, railMat2, SX, y0 + RAIL_H / 2, z));
+    grp.add(cyl(0.025, RAIL_H, railMat2, FAR, y0 + dir * HALF + RAIL_H / 2, z));
+    // 段ごとの縦の筋（手すり子）
+    for (let i = 0; i < STEPS; i++) {
+      const x = SX - RUN * (i + 0.5);
+      const bottom = y0 + dir * (i + 1) * RISE, top = railY(x);
+      grp.add(cyl(0.008, top - bottom, railMat2, x, (top + bottom) / 2, z));
+    }
   }
   // いちばん上の階: のぼりのかわりに床と天井 / いちばん下の階: くだりのかわりに床
   L.upCover = new THREE.Group();
   L.upCover.add(plane(SX - WALL_X, FLIGHT_W, slabMat, (SX + WALL_X) / 2, y0 + 0.001, LEFT_Z, -Math.PI / 2));
   L.upCover.add(plane(-4 - WALL_X, 3.2, std('#eeeeea'), (-4 + WALL_X) / 2, y0 + 4.0, 3.4, Math.PI / 2));
+  // いちばん上の階: 行き止まりの床と下り階段のあいだの手すり（水平）
+  {
+    const z = 3.43, len = SX - WALL_X;
+    const top = cyl(0.022, len, railMat2, (SX + WALL_X) / 2, y0 + RAIL_H, z);
+    top.rotation.z = Math.PI / 2;
+    L.upCover.add(top);
+    L.upCover.add(cyl(0.025, RAIL_H, railMat2, SX, y0 + RAIL_H / 2, z));
+    L.upCover.add(cyl(0.025, RAIL_H, railMat2, WALL_X + 0.03, y0 + RAIL_H / 2, z));
+    for (let x = SX - RUN / 2; x > WALL_X + 0.1; x -= RUN) {
+      L.upCover.add(cyl(0.008, RAIL_H, railMat2, x, y0 + RAIL_H / 2, z));
+    }
+  }
   L.downCover = plane(SX - WALL_X, FLIGHT_W, slabMat, (SX + WALL_X) / 2, y0 + 0.001, RIGHT_Z, -Math.PI / 2);
   // ホールへの入口（level 0 は本物のホールが見える。上下の階は入口の向こうを色で表現）
   if (k !== 0) {
